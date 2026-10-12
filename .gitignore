@@ -1,0 +1,45 @@
+# Node dependencies
+node_modules/
+**/node_modules/
+
+# Frontend build output
+dist/
+**/dist/
+
+# Electron build output
+dist-electron/
+**/dist-electron/
+
+# Java / Maven build output
+target/
+**/target/
+
+# Java build artifacts
+*.jar
+*.war
+
+# Environment files and secrets
+.env
+.env.*
+!.env.example
+
+# Logs
+*.log
+logs/
+
+# IDE
+.idea/
+*.iml
+.vscode/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Temporary/cache files
+.cache/
+*.tmp
+
+# Uploaded user files (never commit - served from persistent volume in prod)
+backend/uploads/
+uploads/
