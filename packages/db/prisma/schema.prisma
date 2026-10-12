@@ -1,0 +1,259 @@
+// PrintDrop — Prisma schema (Phase 2A: review scaffold, NOT applied to any database).
+//
+// Source of truth: Spring Boot JPA entities in
+//   backend/src/main/java/com/printalfa/backend/entity/*.java
+// and enums in backend/src/main/java/com/printalfa/backend/enums/*.java,
+// running against PostgreSQL with `ddl-auto: validate` in production.
+//
+// APPROVED MAPPING DECISIONS (D1/D2/D3):
+// - D1 (legacy EnumType.STRING): all 17 enum-annotated entity fields are
+//   stored by Hibernate as VARCHAR holding the enum NAME (verified: every
+//   annotation is @Enumerated(EnumType.STRING); UserPrincipal uses
+//   role.name() for the JWT claim and granted authority). Prisma native
+//   PostgreSQL ENUMs would force a varchar->enum type conversion, so these
+//   columns are modelled as String + @db.VarChar(255). The exact allowed
+//   value sets are preserved in packages/domain/src/legacyEnums.ts
+//   (type-level documentation only; runtime validation arrives with the
+//   API migration). No Prisma `enum` blocks are declared.
+// - D2 (TEXT vs VARCHAR): the only explicit length in the entities is
+//   ShopPricing.passportPrice (precision 10, scale 2). Every other String
+//   is Hibernate-default VARCHAR(255), so every non-enum String field
+//   below carries @db.VarChar(255). Exceptions preserved: passportPrice
+//   stays @db.Decimal(10,2); UUID-typed fields stay @db.Uuid.
+// - D3 (referential actions): Hibernate default is effectively NO ACTION
+//   and all deletes are service-driven (deleteOrder removes job+payment
+//   rows explicitly; AdminDocumentService nullifies document refs via JPQL
+//   BEFORE row delete; sessions revoked via service). Every relation is
+//   therefore explicit onDelete: NoAction, onUpdate: NoAction, EXCEPT
+//   OrderItem.order which keeps onDelete: Cascade (JPA cascade ALL +
+//   orphanRemoval; onUpdate is NoAction since UUID PKs are immutable).
+//   Limitation: PostgreSQL treats NO ACTION like RESTRICT except for
+//   deferrability; this matches Hibernate-emitted DDL, which declares no
+//   explicit action either.
+//
+// NOT VERIFIED (unchanged assumptions, pending source evidence):
+// - Money columns other than passportPrice assume numeric(19,2)
+//   (Hibernate BigDecimal default).
+// - Timestamps assume TIMESTAMP(6) (Hibernate LocalDateTime mapping).
+// - No secondary indexes are declared (entities define none); index
+//   proposals live in the review report, not in this schema.
+// - Deliberately NOT included: the proposed idempotency_keys table
+//   (deferred for separate approval).
+//
+// Table/column names keep Hibernate's snake_case mapping via @map
+// (explicit @JoinColumn names are authoritative: shop_id, order_id,
+// document_id, user_id). UUID PKs stay @db.Uuid (GenerationType.UUID).
+// Timestamps carry NO database defaults: the application sets them
+// (@PrePersist/@PreUpdate semantics move to the domain layer later).
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id          String   @id @default(uuid()) @db.Uuid
+  email       String   @unique @db.VarChar(255)
+  password    String   @db.VarChar(255)
+  name        String?  @db.VarChar(255)
+  phone       String?  @db.VarChar(255)
+  // Legacy UserRole (EnumType.STRING): ROLE_SHOP_ADMIN | ROLE_SUPER_ADMIN | ROLE_PRINT_AGENT
+  role        String   @db.VarChar(255)
+  shopId      String?  @map("shop_id") @db.Uuid
+  shop        Shop?    @relation(fields: [shopId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  sessions    UserSession[]
+  resetTokens PasswordResetToken[]
+  createdAt   DateTime @map("created_at") @db.Timestamp(6)
+
+  @@map("app_users")
+}
+
+model Shop {
+  id        String       @id @default(uuid()) @db.Uuid
+  name      String       @db.VarChar(255)
+  slug      String       @unique @db.VarChar(255)
+  address   String?      @db.VarChar(255)
+  phone     String?      @db.VarChar(255)
+  logoUrl   String?      @map("logo_url") @db.VarChar(255)
+  ownerName String?      @map("owner_name") @db.VarChar(255)
+  city      String?      @db.VarChar(255)
+  state     String?      @db.VarChar(255)
+  pincode   String?      @db.VarChar(255)
+  isOpen    Boolean?     @map("is_open")
+  apiKey    String?      @unique @map("api_key") @db.VarChar(255)
+  createdAt DateTime     @map("created_at") @db.Timestamp(6)
+  users     User[]
+  pricing   ShopPricing?
+  orders    PrintOrder[]
+
+  @@map("shops")
+}
+
+model ShopPricing {
+  id            String  @id @default(uuid()) @db.Uuid
+  shopId        String  @unique @map("shop_id") @db.Uuid
+  shop          Shop    @relation(fields: [shopId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  bwA4Single    Decimal @map("bw_a4_single") @db.Decimal(19, 2)
+  bwA4Double    Decimal @map("bw_a4_double") @db.Decimal(19, 2)
+  colorA4Single Decimal @map("color_a4_single") @db.Decimal(19, 2)
+  colorA4Double Decimal @map("color_a4_double") @db.Decimal(19, 2)
+  bwA3Single    Decimal @map("bw_a3_single") @db.Decimal(19, 2)
+  bwA3Double    Decimal @map("bw_a3_double") @db.Decimal(19, 2)
+  colorA3Single Decimal @map("color_a3_single") @db.Decimal(19, 2)
+  colorA3Double Decimal @map("color_a3_double") @db.Decimal(19, 2)
+  passportPrice Decimal @map("passport_price") @db.Decimal(10, 2)
+
+  @@map("shop_pricings")
+}
+
+model Document {
+  id               String      @id @default(uuid()) @db.Uuid
+  originalFileName String      @map("original_file_name") @db.VarChar(255)
+  storedFileName   String      @unique @map("stored_file_name") @db.VarChar(255)
+  contentType      String?     @map("content_type") @db.VarChar(255)
+  fileSize         BigInt      @map("file_size")
+  pageCount        Int         @map("page_count")
+  filePath         String?     @map("file_path") @db.VarChar(255)
+  shopId           String?     @map("shop_id") @db.Uuid
+  parentDocumentId String?     @map("parent_document_id") @db.Uuid
+  uploadedAt       DateTime    @map("uploaded_at") @db.Timestamp(6)
+  items            OrderItem[]
+  legacyOrders     PrintOrder[] @relation("LegacyDocument")
+
+  @@map("documents")
+}
+
+model PrintOrder {
+  id                String   @id @default(uuid()) @db.Uuid
+  orderNumber       String   @unique @map("order_number") @db.VarChar(255)
+  publicToken       String   @unique @map("public_token") @db.Uuid
+  shopId            String   @map("shop_id") @db.Uuid
+  shop              Shop     @relation(fields: [shopId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  items             OrderItem[]
+  // Legacy single-item columns (nullable for backward compatibility).
+  documentId        String?  @map("document_id") @db.Uuid
+  document          Document? @relation("LegacyDocument", fields: [documentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  // Legacy PrintType (EnumType.STRING): PRINT | XEROX | PASSPORT_PHOTO
+  printType         String?  @map("print_type") @db.VarChar(255)
+  // Legacy ColorMode (EnumType.STRING): BW | COLOR
+  colorMode         String?  @map("color_mode") @db.VarChar(255)
+  // Legacy PaperSize (EnumType.STRING): A4 | A3
+  paperSize         String?  @map("paper_size") @db.VarChar(255)
+  // Legacy PrintSide (EnumType.STRING): SINGLE | DOUBLE
+  printSide         String?  @map("print_side") @db.VarChar(255)
+  pageRange         String?  @map("page_range") @db.VarChar(255)
+  copies            Int?
+  calculatedPages   Int?     @map("calculated_pages")
+  totalPrice        Decimal  @map("total_price") @db.Decimal(19, 2)
+  // Legacy PaymentMethod (EnumType.STRING): ONLINE | PAY_AT_SHOP
+  paymentMethod     String   @map("payment_method") @db.VarChar(255)
+  // Legacy PaymentStatus (EnumType.STRING): PENDING | PAID | FAILED | REFUNDED
+  paymentStatus     String   @map("payment_status") @db.VarChar(255)
+  // Legacy PrintStatus (EnumType.STRING): PENDING | PRINTING | COMPLETED | CANCELLED | FAILED
+  printStatus       String   @map("print_status") @db.VarChar(255)
+  customerName      String?  @map("customer_name") @db.VarChar(255)
+  customerPhone     String?  @map("customer_phone") @db.VarChar(255)
+  razorpayOrderId   String?  @unique @map("razorpay_order_id") @db.VarChar(255)
+  razorpayPaymentId String?  @unique @map("razorpay_payment_id") @db.VarChar(255)
+  razorpaySignature String?  @map("razorpay_signature") @db.VarChar(255)
+  createdAt         DateTime @map("created_at") @db.Timestamp(6)
+  updatedAt         DateTime @map("updated_at") @db.Timestamp(6)
+  payment           Payment?
+  job               PrintJob?
+
+  @@map("print_orders")
+}
+
+model OrderItem {
+  id              String     @id @default(uuid()) @db.Uuid
+  orderId         String     @map("order_id") @db.Uuid
+  order           PrintOrder @relation(fields: [orderId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  documentId      String?    @map("document_id") @db.Uuid
+  document        Document?  @relation(fields: [documentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  // Legacy PrintType (EnumType.STRING): PRINT | XEROX | PASSPORT_PHOTO
+  printType       String     @map("print_type") @db.VarChar(255)
+  // Legacy ColorMode (EnumType.STRING): BW | COLOR
+  colorMode       String     @map("color_mode") @db.VarChar(255)
+  // Legacy PaperSize (EnumType.STRING): A4 | A3
+  paperSize       String     @map("paper_size") @db.VarChar(255)
+  // Legacy PrintSide (EnumType.STRING): SINGLE | DOUBLE
+  printSide       String     @map("print_side") @db.VarChar(255)
+  pageRange       String     @map("page_range") @db.VarChar(255)
+  copies          Int
+  calculatedPages Int        @map("calculated_pages")
+  unitPrice       Decimal    @map("unit_price") @db.Decimal(19, 2)
+  itemPrice       Decimal    @map("item_price") @db.Decimal(19, 2)
+  // Legacy PrintStatus (EnumType.STRING): PENDING | PRINTING | COMPLETED | CANCELLED | FAILED
+  printStatus     String     @map("print_status") @db.VarChar(255)
+  createdAt       DateTime   @map("created_at") @db.Timestamp(6)
+  updatedAt       DateTime   @map("updated_at") @db.Timestamp(6)
+
+  @@map("order_items")
+}
+
+model Payment {
+  id            String   @id @default(uuid()) @db.Uuid
+  orderId       String   @unique @map("order_id") @db.Uuid
+  order         PrintOrder @relation(fields: [orderId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  transactionId String?  @map("transaction_id") @db.VarChar(255)
+  amount        Decimal  @db.Decimal(19, 2)
+  // Legacy PaymentMethod (EnumType.STRING): ONLINE | PAY_AT_SHOP
+  paymentMethod String   @map("payment_method") @db.VarChar(255)
+  // Legacy PaymentStatus (EnumType.STRING): PENDING | PAID | FAILED | REFUNDED
+  status        String   @db.VarChar(255)
+  createdAt     DateTime @map("created_at") @db.Timestamp(6)
+
+  @@map("payments")
+}
+
+model PrintJob {
+  id              String    @id @default(uuid()) @db.Uuid
+  orderId         String    @unique @map("order_id") @db.Uuid
+  order           PrintOrder @relation(fields: [orderId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  // Legacy JobStatus (EnumType.STRING): QUEUED | PROCESSING | COMPLETED | FAILED
+  status          String    @db.VarChar(255)
+  // JPA @Version equivalent: no Prisma native support. The service layer
+  // performs conditional updateMany (WHERE id + status) and checks the
+  // affected row count, mirroring the claimJob JPQL atomic-claim update.
+  version         BigInt?
+  assignedAgentId String?   @map("assigned_agent_id") @db.VarChar(255)
+  createdAt       DateTime  @map("created_at") @db.Timestamp(6)
+  updatedAt       DateTime  @map("updated_at") @db.Timestamp(6)
+
+  @@map("print_jobs")
+}
+
+model UserSession {
+  id            String   @id @default(uuid()) @db.Uuid
+  userId        String   @map("user_id") @db.Uuid
+  user          User     @relation(fields: [userId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  sessionToken  String   @unique @map("session_token") @db.VarChar(255)
+  deviceId      String   @map("device_id") @db.VarChar(255)
+  deviceName    String?  @map("device_name") @db.VarChar(255)
+  appVersion    String?  @map("app_version") @db.VarChar(255)
+  createdAt     DateTime @map("created_at") @db.Timestamp(6)
+  lastHeartbeat DateTime? @map("last_heartbeat") @db.Timestamp(6)
+  expiresAt     DateTime @map("expires_at") @db.Timestamp(6)
+  // Legacy SessionStatus (EnumType.STRING): ACTIVE | REVOKED | EXPIRED
+  status        String   @db.VarChar(255)
+  revokedAt     DateTime? @map("revoked_at") @db.Timestamp(6)
+  revokedReason String?  @map("revoked_reason") @db.VarChar(255)
+
+  @@map("user_sessions")
+}
+
+model PasswordResetToken {
+  id        String   @id @default(uuid()) @db.Uuid
+  userId    String   @map("user_id") @db.Uuid
+  user      User     @relation(fields: [userId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  token     String   @unique @db.VarChar(255)
+  expiresAt DateTime @map("expires_at") @db.Timestamp(6)
+  used      Boolean
+  createdAt DateTime @map("created_at") @db.Timestamp(6)
+
+  @@map("password_reset_tokens")
+}

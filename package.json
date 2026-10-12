@@ -1,0 +1,18 @@
+{
+  "name": "printdrop-next",
+  "private": true,
+  "version": "0.0.0",
+  "description": "PrintDrop Next.js migration monorepo (Phase 2A scaffold — APIs/frontends not yet migrated)",
+  "workspaces": [
+    "apps/*",
+    "packages/*",
+    "services/*"
+  ],
+  "scripts": {
+    "typecheck": "npm run typecheck -ws --if-present",
+    "db:validate": "npm exec -w packages/db -- prisma validate"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.3"
+  }
+}

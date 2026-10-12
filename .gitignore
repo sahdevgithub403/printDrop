@@ -43,3 +43,15 @@ Thumbs.db
 # Uploaded user files (never commit - served from persistent volume in prod)
 backend/uploads/
 uploads/
+
+# Next.js migration (Phase 2A+)
+.next/
+**/.next/
+out/
+*.tsbuildinfo
+dist-electron-build/
+**/dist-electron-build/
+packages/db/*.env
+apps/*/.env
+apps/*/.env.local
+services/*/.env
